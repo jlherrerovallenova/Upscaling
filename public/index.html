@@ -82,13 +82,14 @@ img{max-width:100%;display:block;border-radius:8px;background:#000}
   </div>
 
   <div class="card">
-    <p class="note">Las imágenes de entrada muy grandes se reducen a 2048 px en el lado mayor antes de enviarlas, porque el modelo funciona mejor con resoluciones moderadas. Si la entrada ya es grande, el resultado de 8K saldrá ampliado por interpolación además de por IA.</p>
+    <p class="note">Las imágenes de entrada muy grandes se reducen antes de enviarlas (máximo 2048 px en el lado mayor y unos 2 Mpx en total), porque el modelo tiene un límite de memoria de GPU. Si la entrada ya es grande, el resultado de 8K saldrá ampliado por interpolación además de por IA.</p>
   </div>
 </main>
 
 <script>
 const TARGETS = { "4K": 3840, "6K": 6144, "8K": 7680 };
 const MAX_TRANSPORT_BYTES = 4.5e6;
+const MAX_INPUT_PIXELS = 2_000_000; // el modelo admite como máximo ~2,09 M píxeles
 let target = "4K", src = null, srcFile = null, resultUrl = null, resultBlob = null;
 const $ = s => document.querySelector(s);
 const setMsg = (t, cls = "") => { const m = $("#msg"); m.textContent = t; m.className = "msg " + cls; };
@@ -115,14 +116,15 @@ function loadFile(f) {
 // Prepara la imagen para enviarla (reduce si es demasiado grande)
 function toTransport() {
   const long = Math.max(src.w, src.h);
-  if (srcFile.size <= MAX_TRANSPORT_BYTES && long <= 2048 && srcFile.type !== "image/webp") {
+  const pixels = src.w * src.h;
+  if (srcFile.size <= MAX_TRANSPORT_BYTES && long <= 2048 && pixels <= MAX_INPUT_PIXELS && srcFile.type !== "image/webp") {
     return new Promise((res, rej) => {
       const r = new FileReader();
       r.onload = () => res(r.result); r.onerror = rej;
       r.readAsDataURL(srcFile);
     });
   }
-  const s = Math.min(1, 2048 / long);
+  const s = Math.min(1, 2048 / long, Math.sqrt(MAX_INPUT_PIXELS / pixels));
   const c = document.createElement("canvas");
   c.width = Math.round(src.w * s); c.height = Math.round(src.h * s);
   c.getContext("2d").drawImage(src.img, 0, 0, c.width, c.height);
