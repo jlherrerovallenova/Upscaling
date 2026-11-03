@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Upscaler IA · 4K · 6K · 8K</title>
+<style>
+:root{--bg:#0f1115;--card:#181b22;--tx:#e8eaf0;--mut:#8a90a0;--ac:#5b8cff;--bd:#2a2f3a}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--tx);min-height:100vh}
+main{max-width:980px;margin:0 auto;padding:max(24px,env(safe-area-inset-top)) 16px 48px}
+h1{font-size:1.5rem;margin:0 0 4px}
+h2{font-size:1rem;margin:0 0 12px}
+.sub{color:var(--mut);margin:0 0 20px;font-size:.92rem;line-height:1.45}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:18px;margin-bottom:16px}
+.drop{border:2px dashed var(--bd);border-radius:12px;padding:28px 16px;text-align:center;cursor:pointer;color:var(--mut)}
+.drop.over{border-color:var(--ac);color:var(--tx)}
+.drop input{display:none}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:14px}
+.seg{display:flex;border:1px solid var(--bd);border-radius:10px;overflow:hidden}
+.seg button{background:transparent;color:var(--tx);border:0;padding:10px 18px;cursor:pointer;font-size:.95rem}
+.seg button.on{background:var(--ac);color:#fff}
+label{font-size:.9rem;color:var(--mut);display:flex;gap:8px;align-items:center}
+button.go{background:var(--ac);color:#fff;border:0;border-radius:10px;padding:12px 22px;font-size:1rem;cursor:pointer}
+button.go:disabled{opacity:.45;cursor:default}
+button.ghost{background:transparent;color:var(--tx);border:1px solid var(--bd);border-radius:10px;padding:9px 14px;cursor:pointer}
+.bar{height:8px;background:var(--bd);border-radius:6px;overflow:hidden;margin-top:14px}
+.bar i{display:block;height:100%;width:0;background:var(--ac);transition:width .3s}
+.msg{color:var(--mut);font-size:.88rem;margin-top:10px;min-height:1.2em;line-height:1.4}
+.warn{color:#f0b429}.err{color:#ff6b6b}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:720px){.grid{grid-template-columns:1fr}}
+img{max-width:100%;display:block;border-radius:8px;background:#000}
+.info{font-size:.85rem;color:var(--mut);margin:10px 0 0;line-height:1.5}
+.note{font-size:.82rem;color:var(--mut);margin-top:12px;line-height:1.5}
+.empty{color:var(--mut);font-size:.9rem;text-align:center;padding:40px 0}
+</style>
+</head>
+<body>
+<main>
+  <h1>Upscaler IA · 4K · 6K · 8K</h1>
+  <p class="sub">La IA (Real-ESRGAN, vía Replicate) amplía la imagen x4 y después se ajusta al tamaño elegido.</p>
+
+  <div class="card">
+    <div class="drop" id="drop">
+      Arrastra una imagen aquí o <strong>pulsa para elegirla</strong>
+      <input type="file" id="file" accept="image/*">
+    </div>
+    <div class="row">
+      <div class="seg" id="targets">
+        <button data-t="4K" class="on">4K · 3840 px</button>
+        <button data-t="6K">6K · 6144 px</button>
+        <button data-t="8K">8K · 7680 px</button>
+      </div>
+      <label>Formato
+        <select id="fmt">
+          <option value="image/png">PNG</option>
+          <option value="image/jpeg">JPEG (0,95)</option>
+        </select>
+      </label>
+      <button class="go" id="go" disabled>Mejorar con IA</button>
+    </div>
+    <div class="bar"><i id="bar"></i></div>
+    <div class="msg" id="msg">Selecciona una imagen para empezar.</div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Original</h2>
+      <div class="empty" id="origEmpty">Sin imagen</div>
+      <img id="orig" hidden alt="Original">
+      <p class="info" id="origInfo"></p>
+    </div>
+    <div class="card">
+      <h2>Resultado</h2>
+      <div class="empty" id="resEmpty">Aún no hay resultado</div>
+      <img id="res" hidden alt="Resultado">
+      <p class="info" id="resInfo"></p>
+      <div class="row" id="resActions" hidden><button class="ghost" id="copy">Copiar imagen</button></div>
+      <p class="note" id="resNote" hidden>Para guardarla: mantén pulsada la imagen (móvil) o clic derecho → «Guardar imagen como» (ordenador).</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <p class="note">Las imágenes de entrada muy grandes se reducen a 2048 px en el lado mayor antes de enviarlas, porque el modelo funciona mejor con resoluciones moderadas. Si la entrada ya es grande, el resultado de 8K saldrá ampliado por interpolación además de por IA.</p>
+  </div>
+</main>
+
+<script>
+const TARGETS = { "4K": 3840, "6K": 6144, "8K": 7680 };
+const MAX_TRANSPORT_BYTES = 4.5e6;
+let target = "4K", src = null, srcFile = null, resultUrl = null, resultBlob = null;
+const $ = s => document.querySelector(s);
+const setMsg = (t, cls = "") => { const m = $("#msg"); m.textContent = t; m.className = "msg " + cls; };
+const setProg = p => { $("#bar").style.width = Math.round(p * 100) + "%"; };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// ---------- Carga ----------
+function loadFile(f) {
+  if (!f || !f.type.startsWith("image/")) return setMsg("Ese archivo no es una imagen.", "err");
+  const url = URL.createObjectURL(f);
+  const im = new Image();
+  im.onload = () => {
+    src = { w: im.naturalWidth, h: im.naturalHeight, img: im };
+    srcFile = f;
+    $("#orig").src = url; $("#orig").hidden = false; $("#origEmpty").hidden = true;
+    $("#origInfo").textContent = `${f.name} · ${src.w} × ${src.h} px`;
+    $("#go").disabled = false;
+    setMsg(`Listo para ampliar a ${target}.`);
+  };
+  im.onerror = () => setMsg("No se pudo leer esa imagen.", "err");
+  im.src = url;
+}
+
+// Prepara la imagen para enviarla (reduce si es demasiado grande)
+function toTransport() {
+  const long = Math.max(src.w, src.h);
+  if (srcFile.size <= MAX_TRANSPORT_BYTES && long <= 2048 && srcFile.type !== "image/webp") {
+    return new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(r.result); r.onerror = rej;
+      r.readAsDataURL(srcFile);
+    });
+  }
+  const s = Math.min(1, 2048 / long);
+  const c = document.createElement("canvas");
+  c.width = Math.round(src.w * s); c.height = Math.round(src.h * s);
+  c.getContext("2d").drawImage(src.img, 0, 0, c.width, c.height);
+  return c.toDataURL("image/jpeg", 0.95);
+}
+
+// ---------- Proceso ----------
+async function run() {
+  if (!src) return;
+  $("#go").disabled = true;
+  setProg(0.05);
+  try {
+    setMsg("Enviando imagen a la IA…");
+    const image = await toTransport();
+    const up = await fetch("/api/upscale", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ image }),
+    });
+    const upData = await up.json();
+    if (!up.ok) throw new Error(upData.error || "Error al crear el trabajo.");
+
+    // Sondeo del estado
+    let out = null, tries = 0;
+    while (!out) {
+      await sleep(2500);
+      if (++tries > 240) throw new Error("La IA tarda demasiado. Inténtalo de nuevo más tarde.");
+      const st = await (await fetch(`/api/status?id=${encodeURIComponent(upData.id)}`)).json();
+      if (st.error && !st.status) throw new Error(st.error);
+      if (st.status === "failed" || st.status === "canceled") throw new Error(st.error || "La IA no pudo procesar la imagen.");
+      setProg(0.1 + Math.min(0.75, tries * 0.02));
+      setMsg(`Procesando con IA… (${st.status})`);
+      if (st.status === "succeeded") out = st.output;
+    }
+
+    setProg(0.88);
+    setMsg("Descargando resultado y ajustando tamaño…");
+    const ai = await loadImage(out);
+    await renderTarget(ai);
+  } catch (e) {
+    setMsg(e.message || "Algo ha fallado.", "err");
+    setProg(0);
+  } finally {
+    $("#go").disabled = false;
+  }
+}
+
+function loadImage(url) {
+  return new Promise((res, rej) => {
+    const im = new Image();
+    im.crossOrigin = "anonymous";
+    im.onload = () => res(im);
+    im.onerror = () => rej(new Error("No se pudo descargar el resultado (posible bloqueo CORS de Replicate)."));
+    im.src = url;
+  });
+}
+
+async function renderTarget(ai) {
+  const scale = TARGETS[target] / Math.max(src.w, src.h);
+  const dw = Math.round(src.w * scale), dh = Math.round(src.h * scale);
+  const c = document.createElement("canvas");
+  c.width = dw; c.height = dh;
+  const x = c.getContext("2d");
+  x.imageSmoothingEnabled = true; x.imageSmoothingQuality = "high";
+  x.drawImage(ai, 0, 0, dw, dh);
+  const fmt = $("#fmt").value;
+  const blob = await new Promise(r => c.toBlob(r, fmt, fmt === "image/jpeg" ? 0.95 : undefined));
+  if (!blob) throw new Error("No hay memoria suficiente para el tamaño elegido. Prueba 4K.");
+
+  if (resultUrl) URL.revokeObjectURL(resultUrl);
+  resultBlob = blob; resultUrl = URL.createObjectURL(blob);
+  $("#res").src = resultUrl; $("#res").hidden = false; $("#resEmpty").hidden = true;
+  $("#resInfo").textContent = `${target} · ${dw} × ${dh} px · ${(blob.size / 1048576).toFixed(1)} MB`;
+  $("#resActions").hidden = false; $("#resNote").hidden = false;
+  setProg(1);
+  setMsg(`Listo: ${target} (${dw} × ${dh} px).`);
+}
+
+// ---------- Eventos ----------
+const drop = $("#drop"), file = $("#file");
+drop.addEventListener("click", () => file.click());
+file.addEventListener("change", e => loadFile(e.target.files[0]));
+["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => loadFile(e.dataTransfer.files[0]));
+document.querySelectorAll("#targets button").forEach(b => b.addEventListener("click", () => {
+  target = b.dataset.t;
+  document.querySelectorAll("#targets button").forEach(x => x.classList.toggle("on", x === b));
+}));
+$("#go").addEventListener("click", run);
+$("#copy").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.write([new ClipboardItem({ [resultBlob.type]: resultBlob })]);
+    setMsg("Imagen copiada al portapapeles.");
+  } catch (e) {
+    setMsg("Tu navegador no permite copiar aquí. Mantén pulsada la imagen para guardarla.", "warn");
+  }
+});
+</script>
+</body>
+</html>
